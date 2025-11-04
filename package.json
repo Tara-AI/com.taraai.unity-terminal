@@ -1,6 +1,6 @@
 {
   "name": "com.taraai.unity-terminal",
-  "displayName": "Unity Terminal (PTY)",
+  "displayName": "Unity Terminal",
   "version": "1.0.0",
   "unity": "2021.3",
   "description": "A cross-platform terminal window for the Unity Editor with PTY/ConPTY support, command history, modern theming, and persistent sessions.",
@@ -9,8 +9,6 @@
     "editor",
     "shell",
     "tools",
-    "pty",
-    "conpty",
     "bash",
     "powershell"
   ],
@@ -24,12 +22,5 @@
   "repository": {
     "type": "git",
     "url": "https://github.com/TaraAI/com.taraai.unity-terminal.git"
-  },
-  "samples": [
-    {
-      "displayName": "Example Usage",
-      "description": "Shows how to open the terminal from a menu and customize settings.",
-      "path": "Samples~/Example Usage"
-    }
-  ]
+  }
 }

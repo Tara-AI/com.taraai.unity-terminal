@@ -17,6 +17,7 @@ public class CrossPlatformTerminalWindow : EditorWindow
     private int historyIndex = -1;
     private bool scrollToBottom = true;
     private TerminalSettings settings;
+    private string currentDirectory = "";
 
     private static string sessionFilePath => Path.Combine(Application.persistentDataPath, "terminal_session.txt");
     private static string historyFilePath => Path.Combine(Application.persistentDataPath, "terminal_history.json");
@@ -68,7 +69,18 @@ public class CrossPlatformTerminalWindow : EditorWindow
             EnableRaisingEvents = true
         };
 
-        shellProcess.OutputDataReceived += (s, e) => { if (!string.IsNullOrEmpty(e.Data)) AppendOutput(e.Data, false); };
+        shellProcess.OutputDataReceived += (s, e) => 
+        { 
+            if (!string.IsNullOrEmpty(e.Data))
+            {
+                if (e.Data.StartsWith("PATH:"))
+                {
+                    currentDirectory = e.Data.Substring(5).Trim();
+                    return;
+                }
+                AppendOutput(e.Data, false);
+            }
+        };
         shellProcess.ErrorDataReceived += (s, e) => { if (!string.IsNullOrEmpty(e.Data)) AppendOutput(e.Data, true); };
 
         try
@@ -77,6 +89,21 @@ public class CrossPlatformTerminalWindow : EditorWindow
             shellProcess.BeginOutputReadLine();
             shellProcess.BeginErrorReadLine();
             AppendOutput($"[Started {shellName} session]\n", false);
+            
+            // Set up command prompt initialization based on shell
+            if (shellName.Contains("pwsh") || shellName.Contains("powershell"))
+            {
+                shellProcess.StandardInput.WriteLine("function prompt { Write-Host \"PATH:$(Get-Location)\"; \"PS > \" }");
+            }
+            else if (shellName.Contains("cmd"))
+            {
+                shellProcess.StandardInput.WriteLine("prompt PATH:$P$_$G");
+            }
+            else
+            {
+                shellProcess.StandardInput.WriteLine("PROMPT_COMMAND='echo \"PATH:$PWD\"'");
+                shellProcess.StandardInput.WriteLine("PS1='\\$ '");
+            }
 
             if (File.Exists(sessionFilePath))
                 AppendOutput(File.ReadAllText(sessionFilePath), false);
@@ -104,13 +131,22 @@ public class CrossPlatformTerminalWindow : EditorWindow
     {
         try
         {
-            if (shellProcess != null && !shellProcess.HasExited)
+            if (shellProcess != null)
             {
-                shellProcess.Kill();
+                if (!shellProcess.HasExited)
+                {
+                    shellProcess.CancelOutputRead();
+                    shellProcess.CancelErrorRead();
+                    shellProcess.Kill();
+                }
                 shellProcess.Dispose();
+                shellProcess = null;
             }
         }
-        catch { }
+        catch (Exception ex)
+        {
+            UnityEngine.Debug.LogError($"Error stopping shell process: {ex.Message}");
+        }
     }
 
     private void SendCommand(string command)
@@ -122,32 +158,58 @@ public class CrossPlatformTerminalWindow : EditorWindow
             return;
         }
 
-        shellProcess.StandardInput.WriteLine(command);
-        shellProcess.StandardInput.Flush();
-        AppendOutput($"<color=#{ColorUtility.ToHtmlStringRGB(settings.accentColor)}>> {command}</color>", false);
+        try
+        {
+            shellProcess.StandardInput.WriteLine(command);
+            shellProcess.StandardInput.Flush();
+        }
+        catch (Exception ex)
+        {
+            AppendOutput($"Error sending command: {ex.Message}", true);
+            // Attempt to restart shell if there was an error
+            StopShell();
+            StartShell();
+            return;
+        }
+        
+        // Don't echo the command since it's already visible in the prompt
+        if (command.Trim().ToLower() == "clear" || command.Trim().ToLower() == "cls")
+        {
+            outputBuilder.Clear();
+        }
 
-        commandHistory.Add(command);
-        historyIndex = commandHistory.Count;
+        // Only add non-empty commands to history
+        if (!string.IsNullOrWhiteSpace(command))
+        {
+            commandHistory.Add(command);
+            historyIndex = commandHistory.Count;
+        }
     }
 
     private void AppendOutput(string text, bool isError)
     {
-        string colored = ApplySyntaxColor(text, isError);
-        outputBuilder.AppendLine(colored);
-        scrollToBottom = true;
-        Repaint();
+        // Ensure thread safety when appending output
+        lock (outputBuilder)
+        {
+            string colored = ApplySyntaxColor(text, isError);
+            outputBuilder.AppendLine(colored);
+            scrollToBottom = true;
+            EditorApplication.delayCall += () => Repaint();
+        }
     }
 
     private void OnGUI()
     {
         DrawModernToolbar();
 
-        // Background style
-        var bg = new GUIStyle(EditorStyles.textArea)
+        // Terminal window style
+        var terminalStyle = new GUIStyle(EditorStyles.textArea)
         {
             richText = true,
             wordWrap = settings.wordWrap,
-            normal = { textColor = Color.white }
+            normal = { textColor = Color.white },
+            padding = new RectOffset(10, 10, 10, 10),
+            margin = new RectOffset(0, 0, 0, 0)
         };
 
         if (settings.enableTransparency)
@@ -171,17 +233,40 @@ public class CrossPlatformTerminalWindow : EditorWindow
         EditorGUILayout.EndScrollView();
 
         GUILayout.Space(4);
-        EditorGUILayout.BeginHorizontal();
-        GUI.SetNextControlName("InputField");
-        inputCommand = EditorGUILayout.TextField(inputCommand, GUILayout.ExpandWidth(true));
-
-        GUI.backgroundColor = settings.accentColor;
-        if (GUILayout.Button("Run", GUILayout.Width(70)))
+        
+        // Create a horizontal layout for the prompt and input
+        EditorGUILayout.BeginHorizontal(GUILayout.ExpandWidth(true));
+        
+        // Display current directory prompt
+        GUIStyle promptStyle = new GUIStyle(EditorStyles.label)
         {
-            SendCommand(inputCommand);
-            inputCommand = "";
+            richText = true,
+            fontSize = settings.fontSize,
+            font = Font.CreateDynamicFontFromOSFont("Consolas", settings.fontSize),
+            normal = { textColor = settings.accentColor }
+        };
+        
+        string prompt = $"<color=#{ColorUtility.ToHtmlStringRGB(settings.accentColor)}>{currentDirectory}></color> ";
+        float promptWidth = promptStyle.CalcSize(new GUIContent(prompt)).x;
+        GUILayout.Label(prompt, promptStyle, GUILayout.Width(promptWidth));
+
+        // Command input field with custom style
+        GUI.SetNextControlName("InputField");
+        var inputStyle = new GUIStyle(EditorStyles.textField)
+        {
+            fontSize = settings.fontSize,
+            font = Font.CreateDynamicFontFromOSFont("Consolas", settings.fontSize),
+            normal = { textColor = Color.white },
+            margin = new RectOffset(0, 0, 2, 2)
+        };
+        
+        string newInput = EditorGUILayout.TextField(inputCommand, inputStyle, GUILayout.ExpandWidth(true));
+        if (newInput != inputCommand)
+        {
+            inputCommand = newInput;
+            GUI.FocusControl("InputField");
         }
-        GUI.backgroundColor = Color.white;
+        
         EditorGUILayout.EndHorizontal();
 
         HandleHistoryNavigation();
@@ -211,38 +296,84 @@ public class CrossPlatformTerminalWindow : EditorWindow
 
     private void HandleHistoryNavigation()
     {
+        // Handle keyboard navigation for command history and common shortcuts.
+        // Use both Event.current and Event.current.rawType so we catch keys that
+        // may be consumed by the text field internally.
         var e = Event.current;
-        if (GUI.GetNameOfFocusedControl() != "InputField") return;
 
-        if (e.type == EventType.KeyDown)
+        // Only act when the input field is focused — this prevents global
+        // interception when other controls are used.
+        if (GUI.GetNameOfFocusedControl() != "InputField")
+            return;
+
+        // Prefer rawType KeyDown to catch events even if IMGUI text field
+        // consumes them first. Fall back to normal KeyDown as well.
+        var isKeyDown = (e.rawType == EventType.KeyDown) || (e.type == EventType.KeyDown);
+        if (!isKeyDown)
+            return;
+
+        bool handled = false;
+
+        if (e.keyCode == KeyCode.UpArrow)
         {
-            if (e.keyCode == KeyCode.UpArrow && historyIndex > 0)
+            if (commandHistory.Count > 0 && historyIndex > 0)
             {
                 historyIndex--;
                 inputCommand = commandHistory[historyIndex];
-                e.Use();
             }
-            else if (e.keyCode == KeyCode.DownArrow)
+            else if (commandHistory.Count > 0 && historyIndex == -1)
             {
-                if (historyIndex < commandHistory.Count - 1)
-                {
-                    historyIndex++;
-                    inputCommand = commandHistory[historyIndex];
-                    e.Use();
-                }
-                else
-                {
-                    inputCommand = "";
-                    historyIndex = commandHistory.Count;
-                }
+                historyIndex = commandHistory.Count - 1;
+                inputCommand = commandHistory[historyIndex];
             }
-            else if (e.keyCode == KeyCode.Return)
+            handled = true;
+        }
+        else if (e.keyCode == KeyCode.DownArrow)
+        {
+            if (commandHistory.Count == 0)
+            {
+                inputCommand = "";
+                historyIndex = -1;
+            }
+            else if (historyIndex < 0)
+            {
+                inputCommand = "";
+                historyIndex = commandHistory.Count;
+            }
+            else if (historyIndex < commandHistory.Count - 1)
+            {
+                historyIndex++;
+                inputCommand = commandHistory[historyIndex];
+            }
+            else
+            {
+                inputCommand = "";
+                historyIndex = commandHistory.Count;
+            }
+            handled = true;
+        }
+        else if (e.keyCode == KeyCode.Return && !e.shift)
+        {
+            // Execute command on Enter
+            if (!string.IsNullOrWhiteSpace(inputCommand))
             {
                 SendCommand(inputCommand);
                 inputCommand = "";
-                GUI.FocusControl("InputField");
-                e.Use();
             }
+            handled = true;
+        }
+        else if (e.keyCode == KeyCode.L && e.control)
+        {
+            // Ctrl+L: clear
+            outputBuilder.Clear();
+            handled = true;
+        }
+
+        if (handled)
+        {
+            e.Use();
+            GUI.FocusControl("InputField");
+            Repaint();
         }
     }
 
@@ -297,5 +428,8 @@ public class CrossPlatformTerminalWindow : EditorWindow
         File.WriteAllText(historyFilePath, JsonUtility.ToJson(new CommandHistory { history = commandHistory }));
 
     [Serializable]
-    private class CommandHistory { public List<string> history; }
+    public class CommandHistory
+    {
+        public List<string> history; 
+    }
 }
