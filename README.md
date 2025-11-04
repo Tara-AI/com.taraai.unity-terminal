@@ -1,4 +1,4 @@
-# Unity Terminal (PTY)
+# Unity Terminal
 
 A **cross-platform terminal window for Unity Editor** supporting:
 - Persistent command history and session logs
