@@ -13,7 +13,7 @@ A **cross-platform terminal window for Unity Editor** supporting:
 Add to your project via Unity’s **Package Manager** → **Add package from Git URL**:
 
 ```
-https://github.com/TaraAI/com.taraai.unity-terminal.git
+https://github.com/Tara-AI/com.taraai.unity-terminal.git
 ```
 
 Unity will automatically fetch the package.
