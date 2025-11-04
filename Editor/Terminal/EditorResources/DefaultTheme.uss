@@ -1,0 +1,101 @@
+/* DefaultTheme.uss
+   Windows Terminal inspired theme for Unity Editor Terminal
+   Place this under Editor/Terminal/EditorResources/DefaultTheme.uss
+*/
+
+.terminal {
+    /* Background: near-black with slight tint and translucency */
+    background-color: rgba(12, 12, 14, 0.92);
+    color: #DCDCDC;                     /* foreground text color */
+    font-family: Consolas, "Courier New", monospace;
+    font-size: 14px;
+    line-height: 18px;
+    padding: 10px;
+    margin: 0;
+    overflow: auto;
+}
+
+/* Accent elements (prompt, buttons) */
+.terminal .accent {
+    color: #0AA1FF;                    /* Windows Terminal styled blue */
+}
+
+/* Error / Warning text */
+.terminal .error {
+    color: #FF5C5C;
+    font-weight: 600;
+}
+.terminal .warning {
+    color: #FFA500;
+    font-weight: 600;
+}
+.terminal .success {
+    color: #57E389;
+    font-weight: 600;
+}
+
+/* Input field style */
+.terminal-input {
+    background-color: transparent;
+    border: none;
+    outline: none;
+    color: #DCDCDC;
+    font-family: inherit;
+    font-size: 14px;
+    padding: 6px 8px;
+    margin: 4px 0;
+}
+
+/* Caret / Cursor */
+.terminal .caret {
+    background-color: #DCDCDC;
+    width: 2px;
+    height: 1.1em;
+    margin-left: 2px;
+}
+
+/* Selection (simulate terminal selection) */
+.terminal ::selection {
+    background: rgba(10,161,255,0.18);
+}
+
+/* Toolbar and buttons */
+.terminal-toolbar {
+    background-color: rgba(20,20,24,0.6);
+    border-bottom: 1px solid rgba(255,255,255,0.03);
+    padding: 6px;
+}
+.terminal-toolbar .button {
+    color: #BFC7CF;
+    background-color: transparent;
+    border-radius: 6px;
+    padding: 6px 10px;
+    margin-right: 6px;
+}
+.terminal-toolbar .button:hover {
+    background-color: rgba(10,161,255,0.08);
+    color: #EAF6FF;
+}
+
+/* Rounded panel look */
+.terminal-panel {
+    border-radius: 10px;
+    box-shadow: 0 6px 20px rgba(0,0,0,0.6);
+    padding: 8px;
+}
+
+/* Small helper: muted text */
+.terminal .muted {
+    color: #9AA5B1;
+    font-size: 12px;
+}
+
+/* Make sure rich text works when Unity draws terminal content */
+.terminal .rich {
+    /* nothing here: just a semantic helper for code that injects <color> tags */
+}
+
+/* Responsiveness */
+@media (min-width: 800px) {
+    .terminal { font-size: 15px; }
+}
