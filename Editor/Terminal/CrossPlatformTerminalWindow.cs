@@ -1,15 +1,15 @@
-// CrossPlatformTerminalWindow.cs
 using UnityEngine;
 using UnityEditor;
 using System;
 using System.IO;
+using System.Diagnostics;
 using System.Text;
 using System.Collections.Generic;
-using System.Threading.Tasks;
+using System.Linq;
 
 public class CrossPlatformTerminalWindow : EditorWindow
 {
-    private PtyProcess _pty;
+    private Process shellProcess;
     private StringBuilder outputBuilder = new StringBuilder();
     private Vector2 scrollPos;
     private string inputCommand = "";
@@ -21,14 +21,17 @@ public class CrossPlatformTerminalWindow : EditorWindow
     private static string sessionFilePath => Path.Combine(Application.persistentDataPath, "terminal_session.txt");
     private static string historyFilePath => Path.Combine(Application.persistentDataPath, "terminal_history.json");
 
-    [MenuItem("Window/Terminal/Cross-Platform Shell (PTY)")]
-    public static void ShowWindow() => GetWindow<CrossPlatformTerminalWindow>("Terminal");
+    [MenuItem("Window/Terminal/Terminal")]
+    public static void ShowWindow()
+    {
+        GetWindow<CrossPlatformTerminalWindow>("Terminal");
+    }
 
     private void OnEnable()
     {
         settings = TerminalSettings.Load();
         EditorApplication.quitting += StopShell;
-        StartShellAsync();
+        StartShell();
         LoadHistory();
     }
 
@@ -40,88 +43,89 @@ public class CrossPlatformTerminalWindow : EditorWindow
         EditorApplication.quitting -= StopShell;
     }
 
-    private async void StartShellAsync()
-    {
-        await Task.Delay(10); // let editor settle
-        StartShell();
-    }
-
     private void StartShell()
     {
+        string shellName = ResolveShell();
+        string shellArgs = "";
+
+        if (shellName.Contains("pwsh"))
+            shellArgs = "-NoLogo";
+
+        shellProcess = new Process
+        {
+            StartInfo = new ProcessStartInfo
+            {
+                FileName = shellName,
+                Arguments = shellArgs,
+                CreateNoWindow = true,
+                UseShellExecute = false,
+                RedirectStandardInput = true,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+                StandardOutputEncoding = Encoding.UTF8,
+                StandardErrorEncoding = Encoding.UTF8
+            },
+            EnableRaisingEvents = true
+        };
+
+        shellProcess.OutputDataReceived += (s, e) => { if (!string.IsNullOrEmpty(e.Data)) AppendOutput(e.Data, false); };
+        shellProcess.ErrorDataReceived += (s, e) => { if (!string.IsNullOrEmpty(e.Data)) AppendOutput(e.Data, true); };
+
         try
         {
-            _pty?.Dispose();
-            _pty = PtyProcess.Create();
+            shellProcess.Start();
+            shellProcess.BeginOutputReadLine();
+            shellProcess.BeginErrorReadLine();
+            AppendOutput($"[Started {shellName} session]\n", false);
 
-            // Resolve shell executable
-            string shell = ResolveShellExecutable();
-            string args = "";
-            if (shell == "pwsh") args = "-NoLogo -NoProfile";
-            if (shell == "cmd.exe") args = "/K";
-            if (shell == "/bin/bash" || shell == "bash") args = "-l";
-
-            _pty.OnOutput += Pty_OnOutput;
-            _pty.OnError += Pty_OnError;
-
-            _pty.Start(shell, args);
-            AppendOutput($"[Started shell: {shell}]\n", false);
-            // Restore session
-            if (File.Exists(sessionFilePath)) AppendOutput(File.ReadAllText(sessionFilePath), false);
-        }
-        catch (NotImplementedException nie)
-        {
-            AppendOutput("[PTY not fully implemented on this platform: " + nie.Message + "]", true);
-            _pty?.Dispose();
-            _pty = null;
+            if (File.Exists(sessionFilePath))
+                AppendOutput(File.ReadAllText(sessionFilePath), false);
         }
         catch (Exception ex)
         {
-            AppendOutput("[Start shell failed] " + ex.Message, true);
-            _pty?.Dispose();
-            _pty = null;
+            AppendOutput("[Failed to start shell] " + ex.Message, true);
         }
     }
 
-    private string ResolveShellExecutable()
+    private string ResolveShell()
     {
-        var pref = settings.preferredShell?.ToLower() ?? "auto";
+        string pref = settings.preferredShell.ToLower();
         if (pref != "auto")
-        {
-            if (pref == "pwsh") return "pwsh";
-            if (pref == "cmd" || pref == "cmd.exe") return "cmd.exe";
-            if (pref == "bash" || pref == "zsh") return pref;
-        }
-        // Auto-detect
+            return pref;
+
         if (IsCommandAvailable("pwsh")) return "pwsh";
-#if UNITY_EDITOR_WIN
-        return "cmd.exe";
-#else
+        if (Application.platform == RuntimePlatform.WindowsEditor) return "cmd.exe";
         if (IsCommandAvailable("bash")) return "bash";
         if (IsCommandAvailable("zsh")) return "zsh";
         return "/bin/sh";
-#endif
     }
-
-    private void Pty_OnError(string obj) => AppendOutput(obj, true);
-    private void Pty_OnOutput(string obj) => AppendOutput(obj, false);
 
     private void StopShell()
     {
-        try { _pty?.Kill(); } catch { }
-        try { _pty?.Dispose(); } catch { }
-        _pty = null;
+        try
+        {
+            if (shellProcess != null && !shellProcess.HasExited)
+            {
+                shellProcess.Kill();
+                shellProcess.Dispose();
+            }
+        }
+        catch { }
     }
 
     private void SendCommand(string command)
     {
         if (string.IsNullOrEmpty(command)) return;
-        if (_pty == null)
+        if (shellProcess == null || shellProcess.HasExited)
         {
-            AppendOutput("[Shell not running]", true);
+            AppendOutput("Shell process not running.", true);
             return;
         }
-        _pty.WriteAsync(command + "\n");
+
+        shellProcess.StandardInput.WriteLine(command);
+        shellProcess.StandardInput.Flush();
         AppendOutput($"<color=#{ColorUtility.ToHtmlStringRGB(settings.accentColor)}>> {command}</color>", false);
+
         commandHistory.Add(command);
         historyIndex = commandHistory.Count;
     }
@@ -129,7 +133,7 @@ public class CrossPlatformTerminalWindow : EditorWindow
     private void AppendOutput(string text, bool isError)
     {
         string colored = ApplySyntaxColor(text, isError);
-        outputBuilder.Append(colored);
+        outputBuilder.AppendLine(colored);
         scrollToBottom = true;
         Repaint();
     }
@@ -138,25 +142,27 @@ public class CrossPlatformTerminalWindow : EditorWindow
     {
         DrawModernToolbar();
 
-        // Background and style
-        var bg = new GUIStyle(EditorStyles.textArea) { richText = true, wordWrap = settings.wordWrap, fontSize = settings.fontSize };
-
-        // font
-        GUIStyle labelStyle = new GUIStyle(EditorStyles.label) { richText = true, fontSize = settings.fontSize };
-        try
+        // Background style
+        var bg = new GUIStyle(EditorStyles.textArea)
         {
-            var dynFont = Font.CreateDynamicFontFromOSFont("Consolas", settings.fontSize);
-            if (dynFont != null) labelStyle.font = dynFont;
-        }
-        catch { }
+            richText = true,
+            wordWrap = settings.wordWrap,
+            normal = { textColor = Color.white }
+        };
 
-        // draw background box with rounded-ish look (approx)
-        Rect full = GUILayoutUtility.GetRect(0, position.width, 0, position.height - 60);
-        EditorGUI.DrawRect(full, settings.backgroundColor);
-        GUILayout.Space(-full.height); // keep same rect region for scroll area
+        if (settings.enableTransparency)
+            GUI.backgroundColor = new Color(settings.backgroundColor.r, settings.backgroundColor.g, settings.backgroundColor.b, settings.backgroundColor.a);
+        else
+            GUI.backgroundColor = settings.backgroundColor;
 
-        scrollPos = EditorGUILayout.BeginScrollView(scrollPos, GUILayout.Height(full.height));
-        GUILayout.Label(outputBuilder.ToString(), labelStyle, GUILayout.ExpandHeight(true));
+        scrollPos = EditorGUILayout.BeginScrollView(scrollPos, GUILayout.ExpandHeight(true));
+        GUIStyle labelStyle = new GUIStyle(EditorStyles.label)
+        {
+            richText = true,
+            fontSize = settings.fontSize,
+            font = Font.CreateDynamicFontFromOSFont("Consolas", settings.fontSize)
+        };
+        GUILayout.Label(outputBuilder.ToString(), labelStyle);
         if (scrollToBottom && Event.current.type == EventType.Repaint)
         {
             scrollPos.y = Mathf.Infinity;
@@ -164,12 +170,13 @@ public class CrossPlatformTerminalWindow : EditorWindow
         }
         EditorGUILayout.EndScrollView();
 
-        GUILayout.Space(6);
+        GUILayout.Space(4);
         EditorGUILayout.BeginHorizontal();
         GUI.SetNextControlName("InputField");
         inputCommand = EditorGUILayout.TextField(inputCommand, GUILayout.ExpandWidth(true));
+
         GUI.backgroundColor = settings.accentColor;
-        if (GUILayout.Button("Run", GUILayout.Width(80)))
+        if (GUILayout.Button("Run", GUILayout.Width(70)))
         {
             SendCommand(inputCommand);
             inputCommand = "";
@@ -183,12 +190,22 @@ public class CrossPlatformTerminalWindow : EditorWindow
     private void DrawModernToolbar()
     {
         EditorGUILayout.BeginHorizontal(EditorStyles.toolbar);
+
         GUI.backgroundColor = settings.accentColor;
-        if (GUILayout.Button("Clear", EditorStyles.toolbarButton)) { outputBuilder.Clear(); }
-        if (GUILayout.Button("Restart", EditorStyles.toolbarButton)) { StopShell(); StartShell(); }
+        if (GUILayout.Button("Clear", EditorStyles.toolbarButton))
+            outputBuilder.Clear();
+        if (GUILayout.Button("Restart", EditorStyles.toolbarButton))
+        {
+            StopShell();
+            StartShell();
+        }
         GUI.backgroundColor = Color.white;
+
         GUILayout.FlexibleSpace();
-        if (GUILayout.Button("⚙ Settings", EditorStyles.toolbarButton)) TerminalSettingsWindow.ShowWindow(settings);
+        if (GUILayout.Button("⚙ Settings", EditorStyles.toolbarButton))
+        {
+            TerminalSettingsWindow.ShowWindow(settings);
+        }
         EditorGUILayout.EndHorizontal();
     }
 
@@ -196,6 +213,7 @@ public class CrossPlatformTerminalWindow : EditorWindow
     {
         var e = Event.current;
         if (GUI.GetNameOfFocusedControl() != "InputField") return;
+
         if (e.type == EventType.KeyDown)
         {
             if (e.keyCode == KeyCode.UpArrow && historyIndex > 0)
@@ -230,9 +248,14 @@ public class CrossPlatformTerminalWindow : EditorWindow
 
     private string ApplySyntaxColor(string text, bool isError)
     {
-        if (isError) return $"<color=#ff5555>{text}</color>";
-        if (text.IndexOf("warning", StringComparison.OrdinalIgnoreCase) >= 0) return $"<color=#ffaa00>{text}</color>";
-        if (text.IndexOf("error", StringComparison.OrdinalIgnoreCase) >= 0) return $"<color=#ff3333>{text}</color>";
+        if (isError)
+            return $"<color=#ff5555>{text}</color>";
+        if (text.Contains("warning", StringComparison.OrdinalIgnoreCase))
+            return $"<color=#ffaa00>{text}</color>";
+        if (text.Contains("error", StringComparison.OrdinalIgnoreCase))
+            return $"<color=#ff3333>{text}</color>";
+        if (text.Contains("success", StringComparison.OrdinalIgnoreCase))
+            return $"<color=#55ff55>{text}</color>";
         return text;
     }
 
@@ -240,39 +263,39 @@ public class CrossPlatformTerminalWindow : EditorWindow
     {
         try
         {
-#if UNITY_EDITOR_WIN
-            var p = new System.Diagnostics.ProcessStartInfo("where", cmd) { CreateNoWindow = true, UseShellExecute = false, RedirectStandardOutput = true };
-#else
-            var p = new System.Diagnostics.ProcessStartInfo("which", cmd) { CreateNoWindow = true, UseShellExecute = false, RedirectStandardOutput = true };
-#endif
-            var proc = System.Diagnostics.Process.Start(p);
-            string outp = proc.StandardOutput.ReadToEnd();
+            var proc = new Process
+            {
+                StartInfo = new ProcessStartInfo
+                {
+                    FileName = Application.platform == RuntimePlatform.WindowsEditor ? "where" : "which",
+                    Arguments = cmd,
+                    CreateNoWindow = true,
+                    RedirectStandardOutput = true,
+                    UseShellExecute = false
+                }
+            };
+            proc.Start();
+            string result = proc.StandardOutput.ReadToEnd();
             proc.WaitForExit();
-            return !string.IsNullOrEmpty(outp.Trim());
+            return !string.IsNullOrEmpty(result.Trim());
         }
         catch { return false; }
     }
 
-    private void SaveSession() { try { File.WriteAllText(sessionFilePath, outputBuilder.ToString()); } catch { } }
+    private void SaveSession() => File.WriteAllText(sessionFilePath, outputBuilder.ToString());
 
     private void LoadHistory()
     {
-        try
-        {
-            if (File.Exists(historyFilePath))
-            {
-                var ch = JsonUtility.FromJson<CommandHistory>(File.ReadAllText(historyFilePath));
-                commandHistory = ch.history ?? new List<string>();
-            }
-        }
-        catch { commandHistory = new List<string>(); }
+        if (File.Exists(historyFilePath))
+            commandHistory = JsonUtility.FromJson<CommandHistory>(File.ReadAllText(historyFilePath)).history;
+        else
+            commandHistory = new List<string>();
         historyIndex = commandHistory.Count;
     }
 
-    private void SaveHistory()
-    {
-        try { File.WriteAllText(historyFilePath, JsonUtility.ToJson(new CommandHistory { history = commandHistory })); } catch { }
-    }
+    private void SaveHistory() =>
+        File.WriteAllText(historyFilePath, JsonUtility.ToJson(new CommandHistory { history = commandHistory }));
 
-    [Serializable] class CommandHistory { public List<string> history; }
+    [Serializable]
+    private class CommandHistory { public List<string> history; }
 }

@@ -7,7 +7,7 @@
     /* Background: near-black with slight tint and translucency */
     background-color: rgba(12, 12, 14, 0.92);
     color: #DCDCDC;                     /* foreground text color */
-    font-family: Consolas, "Courier New", monospace;
+    font-family: "Consolas", "Courier New", monospace;
     font-size: 14px;
     line-height: 18px;
     padding: 10px;
@@ -34,7 +34,7 @@
     font-weight: 600;
 }
 
-/* Input field style */
+/* Input field style (for the input control area) */
 .terminal-input {
     background-color: transparent;
     border: none;
@@ -46,17 +46,19 @@
     margin: 4px 0;
 }
 
-/* Caret / Cursor */
+/* Caret / Cursor
+   Use pixel height that matches line-height; Unity USS does not support 'em' here.
+*/
 .terminal .caret {
     background-color: #DCDCDC;
     width: 2px;
-    height: 1.1em;
+    height: 18px;     /* matches line-height */
     margin-left: 2px;
 }
 
-/* Selection (simulate terminal selection) */
-.terminal ::selection {
-    background: rgba(10,161,255,0.18);
+/* Selection (USS does not support ::selection everywhere; keep safe alternative) */
+.terminal .selection-highlight {
+    background-color: rgba(10,161,255,0.18);
 }
 
 /* Toolbar and buttons */
@@ -80,7 +82,8 @@
 /* Rounded panel look */
 .terminal-panel {
     border-radius: 10px;
-    box-shadow: 0 6px 20px rgba(0,0,0,0.6);
+    /* Unity USS doesn't support CSS box-shadow directly; use outline for subtle effect */
+    outline: 1px solid rgba(0,0,0,0.35);
     padding: 8px;
 }
 
@@ -90,12 +93,10 @@
     font-size: 12px;
 }
 
-/* Make sure rich text works when Unity draws terminal content */
-.terminal .rich {
-    /* nothing here: just a semantic helper for code that injects <color> tags */
-}
+/* Provide a helper class for rich text spans (Unity uses <color> tags in text) */
+.terminal .rich { }
 
-/* Responsiveness */
-@media (min-width: 800px) {
-    .terminal { font-size: 15px; }
+/* Responsiveness (USS media queries are limited; keep simple) */
+.terminal--large {
+    font-size: 15px;
 }
